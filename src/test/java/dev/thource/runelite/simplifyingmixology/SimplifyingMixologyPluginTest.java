@@ -1,0 +1,13 @@
+package dev.thource.runelite.simplifyingmixology;
+
+import net.runelite.client.RuneLite;
+import net.runelite.client.externalplugins.ExternalPluginManager;
+
+public class SimplifyingMixologyPluginTest {
+
+  @SuppressWarnings("unchecked")
+  public static void main(String[] args) throws Exception {
+    ExternalPluginManager.loadBuiltin(SimplifyingMixologyPlugin.class);
+    RuneLite.main(args);
+  }
+}
