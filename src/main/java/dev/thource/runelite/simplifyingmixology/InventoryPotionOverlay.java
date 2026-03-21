@@ -10,25 +10,18 @@ import net.runelite.client.ui.overlay.WidgetItemOverlay;
 
 public class InventoryPotionOverlay extends WidgetItemOverlay {
   private final SimplifyingMixologyPlugin plugin;
-  private final SimplifyingMixologyConfig config;
 
   @Inject
-  InventoryPotionOverlay(SimplifyingMixologyPlugin plugin, SimplifyingMixologyConfig config) {
+  InventoryPotionOverlay(SimplifyingMixologyPlugin plugin) {
     this.plugin = plugin;
-    this.config = config;
     showOnInventory();
   }
 
   @Override
   public void renderItemOverlay(Graphics2D graphics2D, int itemId, WidgetItem widgetItem) {
-    //        if (!plugin.isInLab() || config.inventoryPotionTagType() ==
-    // InventoryPotionTagType.NONE) {
-    //            return;
-    //        }
-
-    //    if (PotionType.fromItemId(itemId) == null) {
-    //      return;
-    //    }
+    if (!plugin.isInLab() || PotionType.fromItemId(itemId) == null) {
+      return;
+    }
 
     var modifier = plugin.getPotionModifiers()[widgetItem.getWidget().getIndex()];
     var bounds = widgetItem.getCanvasBounds();

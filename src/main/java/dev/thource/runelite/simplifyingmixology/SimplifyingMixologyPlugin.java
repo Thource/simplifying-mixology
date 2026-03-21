@@ -6,11 +6,13 @@ import javax.inject.Inject;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
+import net.runelite.api.GameState;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.ScriptPreFired;
 import net.runelite.api.events.VarbitChanged;
+import net.runelite.api.events.WidgetClosed;
 import net.runelite.api.events.WidgetLoaded;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.InventoryID;
@@ -49,21 +51,40 @@ public class SimplifyingMixologyPlugin extends Plugin {
   private PotionType retortPotionType;
   private PotionType checkForPotionType;
   private PotionModifier checkForPotionModifier;
+  @Getter private boolean inLab;
 
   @Override
   protected void startUp() {
     Arrays.fill(potionModifiers, PotionModifier.UNKNOWN);
 
     overlayManager.add(inventoryPotionOverlay);
+
+    if (client.getGameState() == GameState.LOGGED_IN) {
+      clientThread.invokeLater(this::initialize);
+    }
+  }
+
+  private void initialize() {
+    var ordersLayer = client.getWidget(InterfaceID.MM_OVERLAY, 0);
+    if (ordersLayer == null || ordersLayer.isSelfHidden()) {
+      return;
+    }
+
+    inLab = true;
   }
 
   @Override
   protected void shutDown() {
     overlayManager.remove(inventoryPotionOverlay);
+    inLab = false;
   }
 
   @Subscribe
   void onScriptPreFired(ScriptPreFired event) {
+    if (!inLab) {
+      return;
+    }
+
     // inventory item re-order
     if (event.getScriptId() == 6013) {
       var slot1 = event.getScriptEvent().getSource().getIndex();
@@ -81,6 +102,10 @@ public class SimplifyingMixologyPlugin extends Plugin {
 
   @Subscribe
   public void onItemContainerChanged(ItemContainerChanged event) {
+    if (!inLab) {
+      return;
+    }
+
     if (event.getContainerId() != InventoryID.INV) {
       return;
     }
@@ -131,6 +156,10 @@ public class SimplifyingMixologyPlugin extends Plugin {
 
   @Subscribe
   public void onVarbitChanged(VarbitChanged event) {
+    if (!inLab) {
+      return;
+    }
+
     var varbitId = event.getVarbitId();
     if (varbitId == -1) {
       return;
@@ -163,6 +192,10 @@ public class SimplifyingMixologyPlugin extends Plugin {
 
   @Subscribe
   public void onMenuOptionClicked(MenuOptionClicked event) {
+    if (!inLab) {
+      return;
+    }
+
     var menuEntry = event.getMenuEntry();
 
     if (!menuEntry.getOption().equals("Inspect")) {
@@ -180,6 +213,10 @@ public class SimplifyingMixologyPlugin extends Plugin {
 
   @Subscribe
   public void onMenuEntryAdded(MenuEntryAdded event) {
+    if (!inLab) {
+      return;
+    }
+
     var menuEntry = event.getMenuEntry();
 
     if (menuEntry.getOption().equals("Fulfil-order")
@@ -190,6 +227,15 @@ public class SimplifyingMixologyPlugin extends Plugin {
 
   @Subscribe
   public void onWidgetLoaded(WidgetLoaded event) {
+    if (event.getGroupId() == InterfaceID.MM_OVERLAY) {
+      inLab = true;
+      return;
+    }
+
+    if (!inLab) {
+      return;
+    }
+
     if (lastInspectedSlot == -1) {
       return;
     }
@@ -207,6 +253,15 @@ public class SimplifyingMixologyPlugin extends Plugin {
             });
       }
     }
+  }
+
+  @Subscribe
+  public void onWidgetClosed(WidgetClosed event) {
+    if (event.getGroupId() != InterfaceID.MM_OVERLAY) {
+      return;
+    }
+
+    inLab = false;
   }
 
   private boolean shouldHideFulfil() {
