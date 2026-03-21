@@ -38,10 +38,11 @@ public enum PotionType {
     return ITEM_MAP.get(itemId);
   }
 
-  public static PotionType fromIdx(int potionTypeId) {
-    if (potionTypeId < 0 || potionTypeId >= TYPES.length) {
+  public static PotionType fromIndex(int index) {
+    if (index < 0 || index >= TYPES.length) {
       return null;
     }
-    return TYPES[potionTypeId];
+
+    return TYPES[index];
   }
 }

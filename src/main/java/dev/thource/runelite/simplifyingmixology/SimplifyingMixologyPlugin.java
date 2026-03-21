@@ -10,9 +10,11 @@ import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOptionClicked;
 import net.runelite.api.events.ScriptPreFired;
+import net.runelite.api.events.VarbitChanged;
 import net.runelite.api.events.WidgetLoaded;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.InventoryID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -20,12 +22,17 @@ import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.overlay.OverlayManager;
 
-/** SimplifyingMixologyPlugin is a RuneLite plugin designed to blah. */
+/**
+ * SimplifyingMixologyPlugin is a RuneLite plugin designed to simplify Mastering Mixology by making
+ * it harder to deposit wrong orders.
+ */
 @Slf4j
 @PluginDescriptor(
     name = "Simplifying Mixology",
-    description = "basfas.",
-    tags = {"basga"})
+    description =
+        "Deposit wrong orders no more, Simplifying Mixology turns fulfil-order into a right click"
+            + " option if you don't have a potion from an active order.",
+    tags = {"mastering", "mixology", "order"})
 public class SimplifyingMixologyPlugin extends Plugin {
 
   @Getter @Inject private Client client;
@@ -37,6 +44,11 @@ public class SimplifyingMixologyPlugin extends Plugin {
 
   @Getter private final PotionModifier[] potionModifiers = new PotionModifier[28];
   private int lastInspectedSlot = -1;
+  private PotionType agitatorPotionType;
+  private PotionType alembicPotionType;
+  private PotionType retortPotionType;
+  private PotionType checkForPotionType;
+  private PotionModifier checkForPotionModifier;
 
   @Override
   protected void startUp() {
@@ -73,11 +85,78 @@ public class SimplifyingMixologyPlugin extends Plugin {
       return;
     }
 
+    checkForPotionModify();
+
     var items = event.getItemContainer().getItems();
     for (int slot = 0; slot < items.length; slot++) {
       if (potionModifiers[slot] != PotionModifier.UNKNOWN
           && PotionType.fromItemId(items[slot].getId()) == null) {
         potionModifiers[slot] = PotionModifier.UNKNOWN;
+      }
+    }
+  }
+
+  private void onPotionModified(PotionType potionType, PotionModifier potionModifier) {
+    if (potionType == null) {
+      return;
+    }
+
+    checkForPotionType = potionType;
+    checkForPotionModifier = potionModifier;
+  }
+
+  private void checkForPotionModify() {
+    if (checkForPotionType == null) {
+      return;
+    }
+
+    var inventory = client.getItemContainer(InventoryID.INV);
+    if (inventory == null) {
+      return;
+    }
+
+    var items = inventory.getItems();
+    for (int slot = 0; slot < items.length; slot++) {
+      var item = items[slot];
+      if (item.getId() == checkForPotionType.getItemId()
+          && potionModifiers[slot] == PotionModifier.UNKNOWN) {
+        potionModifiers[slot] = checkForPotionModifier;
+        break;
+      }
+    }
+
+    checkForPotionType = null;
+    checkForPotionModifier = null;
+  }
+
+  @Subscribe
+  public void onVarbitChanged(VarbitChanged event) {
+    var varbitId = event.getVarbitId();
+    if (varbitId == -1) {
+      return;
+    }
+
+    var value = event.getValue();
+    if (varbitId == VarbitID.MM_LAB_AGITATOR_POTION) {
+      if (value == 0) {
+        onPotionModified(agitatorPotionType, PotionModifier.HOMOGENOUS);
+        agitatorPotionType = null;
+      } else {
+        agitatorPotionType = PotionType.fromIndex(value - 1);
+      }
+    } else if (varbitId == VarbitID.MM_LAB_ALEMBIC_POTION) {
+      if (value == 0) {
+        onPotionModified(alembicPotionType, PotionModifier.CRYSTALISED);
+        alembicPotionType = null;
+      } else {
+        alembicPotionType = PotionType.fromIndex(value - 1);
+      }
+    } else if (varbitId == VarbitID.MM_LAB_RETORT_POTION) {
+      if (value == 0) {
+        onPotionModified(retortPotionType, PotionModifier.CONCENTRATED);
+        retortPotionType = null;
+      } else {
+        retortPotionType = PotionType.fromIndex(value - 1);
       }
     }
   }
@@ -131,12 +210,44 @@ public class SimplifyingMixologyPlugin extends Plugin {
   }
 
   private boolean shouldHideFulfil() {
-    //    log.info("order1 type: {}", client.getVarbitValue(VarbitID.MM_LAB_ORDER_1_TYPE));
-    //    log.info("order1 mod: {}", client.getVarbitValue(VarbitID.MM_LAB_ORDER_1_MODIFIER));
-    //    log.info("order2 type: {}", client.getVarbitValue(VarbitID.MM_LAB_ORDER_2_TYPE));
-    //    log.info("order2 mod: {}", client.getVarbitValue(VarbitID.MM_LAB_ORDER_2_MODIFIER));
-    //    log.info("order3 type: {}", client.getVarbitValue(VarbitID.MM_LAB_ORDER_3_TYPE));
-    //    log.info("order3 mod: {}", client.getVarbitValue(VarbitID.MM_LAB_ORDER_3_MODIFIER));
+    var inventory = client.getItemContainer(InventoryID.INV);
+    if (inventory == null) {
+      return true;
+    }
+
+    var order1Type = PotionType.fromIndex(client.getVarbitValue(VarbitID.MM_LAB_ORDER_1_TYPE) - 1);
+    var order1Modifier =
+        PotionModifier.fromIndex(client.getVarbitValue(VarbitID.MM_LAB_ORDER_1_MODIFIER));
+    var order2Type = PotionType.fromIndex(client.getVarbitValue(VarbitID.MM_LAB_ORDER_2_TYPE) - 1);
+    var order2Modifier =
+        PotionModifier.fromIndex(client.getVarbitValue(VarbitID.MM_LAB_ORDER_2_MODIFIER));
+    var order3Type = PotionType.fromIndex(client.getVarbitValue(VarbitID.MM_LAB_ORDER_3_TYPE) - 1);
+    var order3Modifier =
+        PotionModifier.fromIndex(client.getVarbitValue(VarbitID.MM_LAB_ORDER_3_MODIFIER));
+
+    var items = inventory.getItems();
+    for (int slot = 0; slot < items.length; slot++) {
+      var item = items[slot];
+      var modifier = potionModifiers[slot];
+
+      if (order1Modifier == modifier) {
+        if (order1Type != null && item.getId() == order1Type.getItemId()) {
+          return false;
+        }
+      }
+
+      if (order2Modifier == modifier) {
+        if (order2Type != null && item.getId() == order2Type.getItemId()) {
+          return false;
+        }
+      }
+
+      if (order3Modifier == modifier) {
+        if (order3Type != null && item.getId() == order3Type.getItemId()) {
+          return false;
+        }
+      }
+    }
 
     return true;
   }
