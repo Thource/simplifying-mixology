@@ -6,10 +6,10 @@ import javax.inject.Inject;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
-import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOptionClicked;
+import net.runelite.api.events.ScriptPreFired;
 import net.runelite.api.events.WidgetLoaded;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.InventoryID;
@@ -37,13 +37,10 @@ public class SimplifyingMixologyPlugin extends Plugin {
 
   @Getter private final PotionModifier[] potionModifiers = new PotionModifier[28];
   private int lastInspectedSlot = -1;
-  private final ItemContainerWatcher inventoryWatcher  = ItemContainerWatcher.getInventoryWatcher();
 
   @Override
   protected void startUp() {
     Arrays.fill(potionModifiers, PotionModifier.UNKNOWN);
-
-    ItemContainerWatcher.init(client);
 
     overlayManager.add(inventoryPotionOverlay);
   }
@@ -51,24 +48,22 @@ public class SimplifyingMixologyPlugin extends Plugin {
   @Override
   protected void shutDown() {
     overlayManager.remove(inventoryPotionOverlay);
-
-    ItemContainerWatcher.reset();
   }
 
   @Subscribe
-  void onGameTick(GameTick gameTick) {
-    ItemContainerWatcher.onGameTick();
+  void onScriptPreFired(ScriptPreFired event) {
+    // inventory item re-order
+    if (event.getScriptId() == 6013) {
+      var slot1 = event.getScriptEvent().getSource().getIndex();
+      var target = event.getScriptEvent().getTarget();
+      if (target == null) {
+        return;
+      }
 
-    if (inventoryWatcher.wasJustUpdated()) {
-      var itemsAddedLastTick = inventoryWatcher.getItemsAddedLastTick();
-      var itemsRemovedLastTick = inventoryWatcher.getItemsRemovedLastTick();
-
-      itemsAddedLastTick.stream().filter(addedItem -> PotionType.fromItemId(addedItem.getId()) != null).forEach(addedItem -> {
-        itemsRemovedLastTick.stream().filter(removedItem -> removedItem.getId() == addedItem.getId()).findFirst().ifPresent(removedItem -> {
-          potionModifiers[addedItem.getSlot()] = potionModifiers[removedItem.getSlot()];
-          potionModifiers[removedItem.getSlot()] = PotionModifier.UNKNOWN;
-        })
-      });
+      var slot2 = target.getIndex();
+      var temp = potionModifiers[slot1];
+      potionModifiers[slot1] = potionModifiers[slot2];
+      potionModifiers[slot2] = temp;
     }
   }
 
@@ -76,6 +71,14 @@ public class SimplifyingMixologyPlugin extends Plugin {
   public void onItemContainerChanged(ItemContainerChanged event) {
     if (event.getContainerId() != InventoryID.INV) {
       return;
+    }
+
+    var items = event.getItemContainer().getItems();
+    for (int slot = 0; slot < items.length; slot++) {
+      if (potionModifiers[slot] != PotionModifier.UNKNOWN
+          && PotionType.fromItemId(items[slot].getId()) == null) {
+        potionModifiers[slot] = PotionModifier.UNKNOWN;
+      }
     }
   }
 

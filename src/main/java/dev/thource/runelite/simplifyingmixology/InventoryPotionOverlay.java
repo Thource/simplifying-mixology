@@ -26,9 +26,9 @@ public class InventoryPotionOverlay extends WidgetItemOverlay {
     //            return;
     //        }
 
-    if (PotionType.fromItemId(itemId) == null) {
-      return;
-    }
+    //    if (PotionType.fromItemId(itemId) == null) {
+    //      return;
+    //    }
 
     var modifier = plugin.getPotionModifiers()[widgetItem.getWidget().getIndex()];
     var bounds = widgetItem.getCanvasBounds();
@@ -36,7 +36,8 @@ public class InventoryPotionOverlay extends WidgetItemOverlay {
     var y = bounds.y + 10;
 
     drawModifier(graphics2D, modifier, x + 1, y + 1, Color.BLACK); // Drop shadow
-    drawModifier(graphics2D, modifier, x, y, Color.WHITE);
+    drawModifier(
+        graphics2D, modifier, x, y, modifier == PotionModifier.UNKNOWN ? Color.RED : Color.WHITE);
   }
 
   private void drawModifier(
