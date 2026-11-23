@@ -24,6 +24,7 @@ import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.util.Text;
 
 /**
  * SimplifyingMixologyPlugin is a RuneLite plugin designed to simplify Mastering Mixology by making
@@ -46,6 +47,10 @@ public class SimplifyingMixologyPlugin extends Plugin {
   @Getter @Inject private InventoryPotionOverlay inventoryPotionOverlay;
 
   @Getter private final PotionModifier[] potionModifiers = new PotionModifier[28];
+  // true when a digweed has been used on the potion in that slot (tracked, or read from Inspect)
+  @Getter private final boolean[] improved = new boolean[28];
+  private int pendingImproveSlot = -1;
+  private int lastDigweedCount = -1;
   private int lastInspectedSlot = -1;
   private PotionType agitatorPotionType;
   private PotionType alembicPotionType;
@@ -92,6 +97,9 @@ public class SimplifyingMixologyPlugin extends Plugin {
     awaitingNewOrders = false;
     handInClicked = false;
     lastPotionCount = -1;
+    pendingImproveSlot = -1;
+    lastDigweedCount = -1;
+    Arrays.fill(improved, false);
   }
 
   @Subscribe
@@ -112,6 +120,9 @@ public class SimplifyingMixologyPlugin extends Plugin {
       var temp = potionModifiers[slot1];
       potionModifiers[slot1] = potionModifiers[slot2];
       potionModifiers[slot2] = temp;
+      var tempImproved = improved[slot1];
+      improved[slot1] = improved[slot2];
+      improved[slot2] = tempImproved;
     }
   }
 
@@ -145,10 +156,25 @@ public class SimplifyingMixologyPlugin extends Plugin {
     }
     lastPotionCount = potionCount;
 
+    int digweedCount = 0;
+    for (var item : items) {
+      if (item.getId() > 0 && "Digweed".equals(client.getItemDefinition(item.getId()).getName())) {
+        digweedCount += item.getQuantity();
+      }
+    }
+    if (pendingImproveSlot != -1 && lastDigweedCount != -1 && digweedCount < lastDigweedCount) {
+      if (pendingImproveSlot >= 0 && pendingImproveSlot < items.length
+          && PotionType.fromItemId(items[pendingImproveSlot].getId()) != null) {
+        improved[pendingImproveSlot] = true;
+      }
+      pendingImproveSlot = -1;
+    }
+    lastDigweedCount = digweedCount;
+
     for (int slot = 0; slot < items.length; slot++) {
-      if (potionModifiers[slot] != PotionModifier.UNKNOWN
-          && PotionType.fromItemId(items[slot].getId()) == null) {
+      if (PotionType.fromItemId(items[slot].getId()) == null) {
         potionModifiers[slot] = PotionModifier.UNKNOWN;
+        improved[slot] = false;
       }
     }
   }
@@ -240,6 +266,20 @@ public class SimplifyingMixologyPlugin extends Plugin {
 
     var menuEntry = event.getMenuEntry();
 
+    if (menuEntry.getOption().equals("Use") && menuEntry.getTarget().contains("Digweed")
+        && menuEntry.getTarget().contains("->")) {
+      var target = menuEntry.getTarget();
+      if (target.substring(target.indexOf("->")).contains("Digweed")) {
+        // potion used on digweed: the potion is the selected item
+        var selected = client.getSelectedWidget();
+        pendingImproveSlot = selected != null ? selected.getIndex() : -1;
+      } else {
+        // digweed used on potion: the potion is the clicked item
+        pendingImproveSlot = menuEntry.getParam0();
+      }
+      return;
+    }
+
     if (isConveyorFulfil(menuEntry)) {
       if (awaitingNewOrders) {
         // The previous hand-in hasn't produced new orders yet; this click would be judged
@@ -324,6 +364,11 @@ public class SimplifyingMixologyPlugin extends Plugin {
               var text = textBox.getText();
               if (text.startsWith("It's a vial of")) {
                 potionModifiers[lastInspectedSlot] = PotionModifier.fromText(text);
+                // the game wraps this line with a <br> and colour tags, so normalise before matching
+                improved[lastInspectedSlot] =
+                    Text.removeTags(text.replace("<br>", " "))
+                        .replaceAll("\\s+", " ")
+                        .contains("quality has been improved");
                 lastInspectedSlot = -1;
               }
             });

@@ -31,6 +31,19 @@ public class InventoryPotionOverlay extends WidgetItemOverlay {
     drawModifier(graphics2D, modifier, x + 1, y + 1, Color.BLACK); // Drop shadow
     drawModifier(
         graphics2D, modifier, x, y, modifier == PotionModifier.UNKNOWN ? Color.RED : Color.WHITE);
+
+    if (plugin.getImproved()[widgetItem.getWidget().getIndex()]) {
+      // digweed has been used on this potion
+      // centred in the slot, clear of the method text at the top and other plugins' text at the bottom
+      graphics2D.setFont(FontManager.getRunescapeSmallFont());
+      var metrics = graphics2D.getFontMetrics();
+      var dx = bounds.x + (bounds.width - metrics.stringWidth("DW")) / 2;
+      var dy = bounds.y + (bounds.height + metrics.getAscent()) / 2;
+      graphics2D.setColor(Color.BLACK);
+      graphics2D.drawString("DW", dx + 1, dy + 1);
+      graphics2D.setColor(new Color(0x5BE36B));
+      graphics2D.drawString("DW", dx, dy);
+    }
   }
 
   private void drawModifier(
