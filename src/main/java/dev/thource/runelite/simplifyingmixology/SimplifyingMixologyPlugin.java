@@ -51,6 +51,14 @@ public class SimplifyingMixologyPlugin extends Plugin {
   @Getter private final boolean[] improved = new boolean[28];
   private int pendingImproveSlot = -1;
   private int lastDigweedCount = -1;
+  // item id per slot last time we looked, to notice marked items leaving their slot
+  private final int[] prevIds = new int[28];
+  // digweed carried through a station (agitator, alembic, retort)
+  private final boolean[] stationImproved = new boolean[3];
+  private boolean checkForPotionImproved;
+  private int lastImprovedRemovedTick = -5;
+  private int lastStationStart = -1;
+  private int lastStationStartTick = -5;
   private int lastInspectedSlot = -1;
   private PotionType agitatorPotionType;
   private PotionType alembicPotionType;
@@ -73,6 +81,7 @@ public class SimplifyingMixologyPlugin extends Plugin {
   @Override
   protected void startUp() {
     Arrays.fill(potionModifiers, PotionModifier.UNKNOWN);
+    Arrays.fill(prevIds, -1);
 
     overlayManager.add(inventoryPotionOverlay);
 
@@ -100,6 +109,8 @@ public class SimplifyingMixologyPlugin extends Plugin {
     pendingImproveSlot = -1;
     lastDigweedCount = -1;
     Arrays.fill(improved, false);
+    Arrays.fill(stationImproved, false);
+    Arrays.fill(prevIds, -1);
   }
 
   @Subscribe
@@ -123,6 +134,32 @@ public class SimplifyingMixologyPlugin extends Plugin {
       var tempImproved = improved[slot1];
       improved[slot1] = improved[slot2];
       improved[slot2] = tempImproved;
+      var tempId = prevIds[slot1];
+      prevIds[slot1] = prevIds[slot2];
+      prevIds[slot2] = tempId;
+    }
+  }
+
+  // An improved item left the inventory: if a station started at the same time, it went in there.
+  private void onImprovedRemoved() {
+    var tick = client.getTickCount();
+    if (lastStationStart != -1 && lastStationStartTick >= tick - 1) {
+      stationImproved[lastStationStart] = true;
+      lastStationStart = -1;
+    } else {
+      lastImprovedRemovedTick = tick;
+    }
+  }
+
+  private void onStationStarted(int station) {
+    var tick = client.getTickCount();
+    stationImproved[station] = false;
+    if (lastImprovedRemovedTick >= tick - 1) {
+      stationImproved[station] = true;
+      lastImprovedRemovedTick = -5;
+    } else {
+      lastStationStart = station;
+      lastStationStartTick = tick;
     }
   }
 
@@ -136,9 +173,18 @@ public class SimplifyingMixologyPlugin extends Plugin {
       return;
     }
 
-    checkForPotionModify();
-
     var items = event.getItemContainer().getItems();
+
+    // Follow digweed marks: when a marked item leaves its slot, it was used up, handed in or put
+    // into a station (onImprovedRemoved works out which).
+    for (int slot = 0; slot < items.length && slot < prevIds.length; slot++) {
+      var id = items[slot].getId();
+      if (prevIds[slot] != -1 && id != prevIds[slot] && improved[slot]) {
+        improved[slot] = false;
+        onImprovedRemoved();
+      }
+      prevIds[slot] = id;
+    }
 
     int potionCount = 0;
     for (var item : items) {
@@ -163,8 +209,9 @@ public class SimplifyingMixologyPlugin extends Plugin {
       }
     }
     if (pendingImproveSlot != -1 && lastDigweedCount != -1 && digweedCount < lastDigweedCount) {
+      // finished potions and unprocessed bases both count
       if (pendingImproveSlot >= 0 && pendingImproveSlot < items.length
-          && PotionType.fromItemId(items[pendingImproveSlot].getId()) != null) {
+          && items[pendingImproveSlot].getId() > 0) {
         improved[pendingImproveSlot] = true;
       }
       pendingImproveSlot = -1;
@@ -174,18 +221,25 @@ public class SimplifyingMixologyPlugin extends Plugin {
     for (int slot = 0; slot < items.length; slot++) {
       if (PotionType.fromItemId(items[slot].getId()) == null) {
         potionModifiers[slot] = PotionModifier.UNKNOWN;
+      }
+      if (items[slot].getId() <= 0) {
         improved[slot] = false;
       }
     }
+
+    // after the loops above, so the finished potion's mark isn't mistaken for a removed one
+    checkForPotionModify();
   }
 
-  private void onPotionModified(PotionType potionType, PotionModifier potionModifier) {
+  private void onPotionModified(PotionType potionType, PotionModifier potionModifier, int station) {
     if (potionType == null) {
       return;
     }
 
     checkForPotionType = potionType;
     checkForPotionModifier = potionModifier;
+    checkForPotionImproved = stationImproved[station];
+    stationImproved[station] = false;
   }
 
   private void checkForPotionModify() {
@@ -204,6 +258,8 @@ public class SimplifyingMixologyPlugin extends Plugin {
       if (item.getId() == checkForPotionType.getItemId()
           && potionModifiers[slot] == PotionModifier.UNKNOWN) {
         potionModifiers[slot] = checkForPotionModifier;
+        improved[slot] = checkForPotionImproved;
+        prevIds[slot] = item.getId();
         break;
       }
     }
@@ -236,23 +292,32 @@ public class SimplifyingMixologyPlugin extends Plugin {
     var value = event.getValue();
     if (varbitId == VarbitID.MM_LAB_AGITATOR_POTION) {
       if (value == 0) {
-        onPotionModified(agitatorPotionType, PotionModifier.HOMOGENOUS);
+        onPotionModified(agitatorPotionType, PotionModifier.HOMOGENOUS, 0);
         agitatorPotionType = null;
       } else {
+        if (agitatorPotionType == null) {
+          onStationStarted(0);
+        }
         agitatorPotionType = PotionType.fromIndex(value - 1);
       }
     } else if (varbitId == VarbitID.MM_LAB_ALEMBIC_POTION) {
       if (value == 0) {
-        onPotionModified(alembicPotionType, PotionModifier.CRYSTALISED);
+        onPotionModified(alembicPotionType, PotionModifier.CRYSTALISED, 1);
         alembicPotionType = null;
       } else {
+        if (alembicPotionType == null) {
+          onStationStarted(1);
+        }
         alembicPotionType = PotionType.fromIndex(value - 1);
       }
     } else if (varbitId == VarbitID.MM_LAB_RETORT_POTION) {
       if (value == 0) {
-        onPotionModified(retortPotionType, PotionModifier.CONCENTRATED);
+        onPotionModified(retortPotionType, PotionModifier.CONCENTRATED, 2);
         retortPotionType = null;
       } else {
+        if (retortPotionType == null) {
+          onStationStarted(2);
+        }
         retortPotionType = PotionType.fromIndex(value - 1);
       }
     }
