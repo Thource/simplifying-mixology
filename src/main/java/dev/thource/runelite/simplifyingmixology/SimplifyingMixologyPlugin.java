@@ -7,6 +7,7 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
+import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.events.MenuOptionClicked;
@@ -53,6 +54,20 @@ public class SimplifyingMixologyPlugin extends Plugin {
   private PotionModifier checkForPotionModifier;
   @Getter private boolean inLab;
 
+  // Set when an order is handed in; cleared when the new orders arrive (or after a short timeout).
+  // While set, further Fulfil-order clicks are blocked so they can't land on orders we haven't seen.
+  private boolean awaitingNewOrders;
+  private int ticksAwaitingOrders;
+  private static final int MAX_TICKS_AWAITING_ORDERS = 2;
+  // Set when a hand-in has been clicked; the guard only starts once potions actually leave the
+  // inventory, so walking to the conveyor doesn't use up the timeout.
+  private boolean handInClicked;
+  private int ticksSinceHandInClick;
+  // If no hand-in happens this long after the click (walked away, cancelled), stop waiting.
+  private static final int MAX_TICKS_PENDING_HAND_IN = 15;
+  private int lastPotionCount = -1;
+  private int lastOrderChangeTick = -1;
+
   @Override
   protected void startUp() {
     Arrays.fill(potionModifiers, PotionModifier.UNKNOWN);
@@ -77,6 +92,9 @@ public class SimplifyingMixologyPlugin extends Plugin {
   protected void shutDown() {
     overlayManager.remove(inventoryPotionOverlay);
     inLab = false;
+    awaitingNewOrders = false;
+    handInClicked = false;
+    lastPotionCount = -1;
   }
 
   @Subscribe
@@ -113,6 +131,23 @@ public class SimplifyingMixologyPlugin extends Plugin {
     checkForPotionModify();
 
     var items = event.getItemContainer().getItems();
+
+    int potionCount = 0;
+    for (var item : items) {
+      if (PotionType.fromItemId(item.getId()) != null) {
+        potionCount++;
+      }
+    }
+    if (handInClicked && lastPotionCount != -1 && potionCount < lastPotionCount) {
+      handInClicked = false;
+      // If the new orders already arrived this tick, there's nothing to wait for.
+      if (lastOrderChangeTick != client.getTickCount()) {
+        awaitingNewOrders = true;
+        ticksAwaitingOrders = 0;
+      }
+    }
+    lastPotionCount = potionCount;
+
     for (int slot = 0; slot < items.length; slot++) {
       if (potionModifiers[slot] != PotionModifier.UNKNOWN
           && PotionType.fromItemId(items[slot].getId()) == null) {
@@ -165,6 +200,17 @@ public class SimplifyingMixologyPlugin extends Plugin {
       return;
     }
 
+    if (varbitId == VarbitID.MM_LAB_ORDER_1_TYPE
+        || varbitId == VarbitID.MM_LAB_ORDER_2_TYPE
+        || varbitId == VarbitID.MM_LAB_ORDER_3_TYPE
+        || varbitId == VarbitID.MM_LAB_ORDER_1_MODIFIER
+        || varbitId == VarbitID.MM_LAB_ORDER_2_MODIFIER
+        || varbitId == VarbitID.MM_LAB_ORDER_3_MODIFIER) {
+      awaitingNewOrders = false;
+      handInClicked = false;
+      lastOrderChangeTick = client.getTickCount();
+    }
+
     var value = event.getValue();
     if (varbitId == VarbitID.MM_LAB_AGITATOR_POTION) {
       if (value == 0) {
@@ -198,6 +244,30 @@ public class SimplifyingMixologyPlugin extends Plugin {
 
     var menuEntry = event.getMenuEntry();
 
+    if (isConveyorFulfil(menuEntry)) {
+      if (awaitingNewOrders || handInClicked) {
+        // A hand-in is already queued or hasn't produced new orders yet. The server would run
+        // this click on the next tick against the new orders, so drop it.
+        event.consume();
+        return;
+      }
+
+      handInClicked = true;
+      ticksSinceHandInClick = 0;
+      return;
+    }
+
+    if (menuEntry.getOption().equals("Use") && menuEntry.getTarget().contains("Conveyor belt")) {
+      // a deliberate dump also resets the orders
+      handInClicked = true;
+      ticksSinceHandInClick = 0;
+      return;
+    }
+
+    if (!menuEntry.getOption().equals("Inspect")) {
+      handInClicked = false;
+    }
+
     if (!menuEntry.getOption().equals("Inspect")) {
       return;
     }
@@ -219,10 +289,25 @@ public class SimplifyingMixologyPlugin extends Plugin {
 
     var menuEntry = event.getMenuEntry();
 
-    if (menuEntry.getOption().equals("Fulfil-order")
-        && menuEntry.getTarget().equals("<col=ffff>Conveyor belt")) {
-      menuEntry.setDeprioritized(shouldHideFulfil());
+    if (isConveyorFulfil(menuEntry)) {
+      menuEntry.setDeprioritized(awaitingNewOrders || handInClicked || shouldHideFulfil());
     }
+  }
+
+  @Subscribe
+  public void onGameTick(GameTick event) {
+    if (handInClicked && ++ticksSinceHandInClick >= MAX_TICKS_PENDING_HAND_IN) {
+      handInClicked = false;
+    }
+    if (awaitingNewOrders && ++ticksAwaitingOrders >= MAX_TICKS_AWAITING_ORDERS) {
+      // New orders can be identical to the old ones, in which case no varbit changes.
+      awaitingNewOrders = false;
+    }
+  }
+
+  private static boolean isConveyorFulfil(net.runelite.api.MenuEntry menuEntry) {
+    return menuEntry.getOption().equals("Fulfil-order")
+        && menuEntry.getTarget().equals("<col=ffff>Conveyor belt");
   }
 
   @Subscribe
