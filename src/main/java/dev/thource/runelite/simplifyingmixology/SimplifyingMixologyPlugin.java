@@ -75,6 +75,9 @@ public class SimplifyingMixologyPlugin extends Plugin {
   // Set when a hand-in has been clicked; the guard only starts once potions actually leave the
   // inventory, so walking to the conveyor doesn't use up the timeout.
   private boolean handInClicked;
+  private int ticksSinceHandInClick;
+  // If no hand-in happens this long after the click (walked away, cancelled), stop waiting.
+  private static final int MAX_TICKS_PENDING_HAND_IN = 15;
   private int lastPotionCount = -1;
   private int lastOrderChangeTick = -1;
 
@@ -286,6 +289,7 @@ public class SimplifyingMixologyPlugin extends Plugin {
         || varbitId == VarbitID.MM_LAB_ORDER_2_MODIFIER
         || varbitId == VarbitID.MM_LAB_ORDER_3_MODIFIER) {
       awaitingNewOrders = false;
+      handInClicked = false;
       lastOrderChangeTick = client.getTickCount();
     }
 
@@ -346,20 +350,22 @@ public class SimplifyingMixologyPlugin extends Plugin {
     }
 
     if (isConveyorFulfil(menuEntry)) {
-      if (awaitingNewOrders) {
-        // The previous hand-in hasn't produced new orders yet; this click would be judged
-        // against stale orders, so drop it.
+      if (awaitingNewOrders || handInClicked) {
+        // A hand-in is already queued or hasn't produced new orders yet. The server would run
+        // this click on the next tick against the new orders, so drop it.
         event.consume();
         return;
       }
 
       handInClicked = true;
+      ticksSinceHandInClick = 0;
       return;
     }
 
     if (menuEntry.getOption().equals("Use") && menuEntry.getTarget().contains("Conveyor belt")) {
       // a deliberate dump also resets the orders
       handInClicked = true;
+      ticksSinceHandInClick = 0;
       return;
     }
 
@@ -389,12 +395,15 @@ public class SimplifyingMixologyPlugin extends Plugin {
     var menuEntry = event.getMenuEntry();
 
     if (isConveyorFulfil(menuEntry)) {
-      menuEntry.setDeprioritized(awaitingNewOrders || shouldHideFulfil());
+      menuEntry.setDeprioritized(awaitingNewOrders || handInClicked || shouldHideFulfil());
     }
   }
 
   @Subscribe
   public void onGameTick(GameTick event) {
+    if (handInClicked && ++ticksSinceHandInClick >= MAX_TICKS_PENDING_HAND_IN) {
+      handInClicked = false;
+    }
     if (awaitingNewOrders && ++ticksAwaitingOrders >= MAX_TICKS_AWAITING_ORDERS) {
       // New orders can be identical to the old ones, in which case no varbit changes.
       awaitingNewOrders = false;
